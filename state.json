@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "balPop": 100,
+    "balV": 100,
+    "lev": 3,
+    "takerBps": 3.2,
+    "minDiff": 0.02,
+    "maxDays": 7,
+    "maxGap": 0.1,
+    "exitHours": 4,
+    "cooldownMin": 60
+  },
+  "positions": [],
+  "history": [],
+  "pairState": {
+    "BTCUSDT|BTC": "no",
+    "XAUUSDT|XAU": "no",
+    "QQQUSDT|QQQ": "no",
+    "XAGUSDT|XAG": "go",
+    "ETHUSDT|ETH": "no"
+  },
+  "notifyLast": {
+    "XAGUSDT|XAG": 1790870547731
+  },
+  "tgOffset": 263225870
+}
