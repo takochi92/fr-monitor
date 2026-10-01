@@ -176,7 +176,9 @@ const HELP = [
 ].join('\n');
 
 async function handleCommand(text, st, rows) {
-  const [cmdRaw, ...args] = text.replace(/^\//, '').split(/\s+/);
+  // accept "持った銀" / "決済GOLD" without a space too
+  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ)(?=\S)/, '$1 ');
+  const [cmdRaw, ...args] = norm.split(/\s+/);
   const cmd = cmdRaw.toLowerCase();
   const S = st.settings;
   if (['help', 'start', 'ヘルプ'].includes(cmd)) return send(HELP);
@@ -225,7 +227,10 @@ function statusText(st, rows) {
   }
   if (st.positions.length) {
     lines.push('', '<b>📌 保有</b>');
-    for (const p of st.positions) lines.push(`${p.label}: 推定 ${sgnUsd(p.net || 0)} · FR累計 ${sgnUsd(p.earned)} · 清算まで ±${Math.min(p.liqPop ?? 99, p.liqV ?? 99).toFixed(1)}%`);
+    for (const p of st.positions) {
+      const liq = p.liqPop === undefined ? '計算中' : `±${Math.min(p.liqPop, p.liqV).toFixed(1)}%`;
+      lines.push(`${p.label}: 推定 ${sgnUsd(p.net || 0)} · FR累計 ${sgnUsd(p.earned)} · 清算まで ${liq}`);
+    }
   } else lines.push('', '保有なし');
   return lines.join('\n');
 }
