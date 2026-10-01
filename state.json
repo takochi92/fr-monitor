@@ -10,17 +10,38 @@
     "exitHours": 4,
     "cooldownMin": 60
   },
-  "positions": [],
+  "positions": [
+    {
+      "key": "XAGUSDT|XAG",
+      "sym": "XAGUSDT",
+      "label": "銀",
+      "vTicker": "XAG",
+      "popShort": true,
+      "N": 300,
+      "lev": 3,
+      "entryPop": 60.741,
+      "entryV": 60.75865,
+      "entryCost": 0.5095315703865662,
+      "openedAt": 1790872651100,
+      "lastAt": 1790872651962,
+      "earned": 3.00953786149163e-7,
+      "negSince": null,
+      "status": "hold",
+      "net": -0.50953126943278,
+      "liqPop": 32.83333333333333,
+      "liqV": 32.83333333333333
+    }
+  ],
   "history": [],
   "pairState": {
     "BTCUSDT|BTC": "no",
     "XAUUSDT|XAU": "no",
     "QQQUSDT|QQQ": "no",
-    "XAGUSDT|XAG": "go",
+    "XAGUSDT|XAG": "no",
     "ETHUSDT|ETH": "no"
   },
   "notifyLast": {
     "XAGUSDT|XAG": 1790870547731
   },
-  "tgOffset": 263225870
+  "tgOffset": 263225874
 }
