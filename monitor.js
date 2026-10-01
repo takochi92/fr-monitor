@@ -55,8 +55,13 @@ const pct = (v, d = 4) => (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 async function getJson(url, opts) {
-  const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'fr-monitor/1.0' }, ...opts });
-  if (!res.ok) throw new Error(`${res.status} ${url.split('?')[0]}`);
+  const where = url.split('?')[0].replace(/bot[^/]+/, 'bot***'); // never print the bot token
+  const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 (fr-monitor)' }, ...opts });
+  if (!res.ok) {
+    const hint = where.includes('telegram') ? (res.status === 404 || res.status === 401 ? '（トークンが間違っている）' : '')
+      : res.status === 403 ? '（このサーバーからのアクセスを拒否された）' : '';
+    throw new Error(`HTTP ${res.status} ${where} ${hint}`);
+  }
   return res.json();
 }
 
