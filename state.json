@@ -23,25 +23,26 @@
       "entryV": 60.75865,
       "entryCost": 0.5095315703865662,
       "openedAt": 1790872651100,
-      "lastAt": 1790872651962,
-      "earned": 3.00953786149163e-7,
+      "lastAt": 1790886717542,
+      "earned": 0.005682458488032725,
       "negSince": null,
       "status": "hold",
-      "net": -0.50953126943278,
-      "liqPop": 32.83333333333333,
-      "liqV": 32.83333333333333
+      "net": -0.6803253769842312,
+      "liqPop": 32.31473798587445,
+      "liqV": 33.29310325909698
     }
   ],
   "history": [],
   "pairState": {
-    "BTCUSDT|BTC": "no",
+    "BTCUSDT|BTC": "go",
     "XAUUSDT|XAU": "no",
     "QQQUSDT|QQQ": "no",
-    "XAGUSDT|XAG": "no",
+    "XAGUSDT|XAG": "go",
     "ETHUSDT|ETH": "no"
   },
   "notifyLast": {
-    "XAGUSDT|XAG": 1790870547731
+    "XAGUSDT|XAG": 1790870547731,
+    "BTCUSDT|BTC": 1790886717542
   },
-  "tgOffset": 263225874
+  "tgOffset": 263225875
 }
