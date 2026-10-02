@@ -42,7 +42,7 @@ main の `state.json` は初回の種としてだけ使う。
 | 残高 150 120 | PopDEX / Variational の残高 |
 | レバ 3 | レバ上限（銘柄ごとの上限でさらに抑える） |
 | 最大 2 | 同時保有数（証拠金は空き分で割り当て） |
-| 範囲 広い / 主要 | 全銘柄 / 主要5銘柄（GOLD 銀 BTC ETH QQQ） |
+| 範囲 広い / 主要 | 全銘柄 / 主要6銘柄（GOLD 銀 BTC ETH BNB QQQ） |
 | モード 常時 / 厳選 | 常時保有 / FR差が大きい時だけ |
 | 設定 | 設定一覧。`設定 minDiff 0.03` で個別変更 |
 
@@ -65,8 +65,8 @@ main の `state.json` は初回の種としてだけ使う。
 | maxSpreadBps | 15 | 全銘柄モードのスプレッド上限 |
 | takerBps | 3.2 | PopDEXの手数料（bps）。Variationalは0 |
 | reportHour | 21 | 日報の時刻（日本時間） |
-| altMaxLev | 3 | 主要5銘柄以外の暗号資産のレバ上限 |
-| rwaMaxLev | 3 | 主要5銘柄以外の株・商品のレバ上限 |
+| altMaxLev | 3 | 主要6銘柄以外の暗号資産のレバ上限 |
+| rwaMaxLev | 3 | 主要6銘柄以外の株・商品のレバ上限 |
 
 ## 注意
 

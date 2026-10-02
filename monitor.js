@@ -50,6 +50,7 @@ const CORE = {
   XAGUSDT: { label: '銀',   maxLev: 3, market: 'metal',  v: 'XAG' },
   BTCUSDT: { label: 'BTC',  maxLev: 5, market: 'crypto', v: 'BTC' },
   ETHUSDT: { label: 'ETH',  maxLev: 5, market: 'crypto', v: 'ETH' },
+  BNBUSDT: { label: 'BNB',  maxLev: 5, market: 'crypto', v: 'BNB' },
   QQQUSDT: { label: 'QQQ',  maxLev: 5, market: 'us',     v: 'QQQ' },
 };
 const LABEL_ALIASES = { GOLD: 'XAUUSDT', XAU: 'XAUUSDT', 金: 'XAUUSDT', 銀: 'XAGUSDT', SILVER: 'XAGUSDT' };
@@ -294,7 +295,7 @@ async function handleCommand(text, ctx) {
   if (['universe', '範囲'].includes(cmd)) {
     const w = (args[0] || '').toLowerCase();
     S.universe = ['wide', '広い', 'ひろい', '全部'].includes(w) ? 'wide' : ['safe', '主要', '安全'].includes(w) ? 'safe' : S.universe;
-    return send(`✅ 対象: ${S.universe === 'wide' ? '共通銘柄すべて（出来高・スプレッドで絞り込み）' : '主要5銘柄のみ'}`);
+    return send(`✅ 対象: ${S.universe === 'wide' ? '共通銘柄すべて（出来高・スプレッドで絞り込み）' : '主要6銘柄のみ'}`);
   }
   if (['mode', 'モード'].includes(cmd)) {
     const w = (args[0] || '').toLowerCase();
