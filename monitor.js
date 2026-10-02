@@ -252,6 +252,7 @@ const HELP = [
   '持った GOLD … 今の指令どおり建てたとして記録',
   '決済 GOLD … 両方閉じたとして記録',
   '乗り換えた 銀 GOLD … 銀を決済してGOLDを建てたとして記録',
+  '反転した 銀 … 同じ銘柄で売り買いを逆に建て直したとして記録',
   '残高 150 120 … PopDEX / Variational 残高',
   'レバ 3 … レバ上限',
   '最大 2 … 同時保有数',
@@ -264,7 +265,7 @@ async function handleCommand(text, ctx) {
   const { st } = ctx;
   const S = st.settings;
   const rows = () => ctx.rows;
-  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた|モード)(?=\S)/, '$1 ');
+  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた|反転した|モード)(?=\S)/, '$1 ');
   const [cmdRaw, ...args] = norm.split(/\s+/);
   const cmd = cmdRaw.toLowerCase();
   if (['help', 'start', 'ヘルプ'].includes(cmd)) return send(HELP);
@@ -322,6 +323,15 @@ async function handleCommand(text, ctx) {
     if (!p) return send('その銘柄は保有記録にないよ。例: 決済 GOLD');
     const total = st.history.reduce((s, x) => s + x.net, 0);
     return send(`✅ <b>${p.label}</b> 決済を記録 · 推定損益 ${sgnUsd(p.net || 0)}\n決済済み合計 ${st.history.length}件 ${sgnUsd(total)}`);
+  }
+  if (['flip', '反転した', 'はんてんした'].includes(cmd)) {
+    const p = closePosition(st, args[0], ctx.now);
+    if (!p) return send('使い方: 反転した 銀');
+    ctx.recompute();
+    const r = resolveRow(args[0], ctx.rows);
+    if (!r) return send(`${p.label} の決済は記録した。「持った ${p.label}」で記録し直してね`);
+    openPosition(st, { ...r, popShort: !p.popShort }, ctx.now);
+    return send(`🔁 ${p.label} の向きを反転して記録（${sgnUsd(p.net || 0)}）\n${orderText(!p.popShort, r.N, r.lev, r.vTicker)}`);
   }
   if (['switch', '乗り換えた', 'のりかえた'].includes(cmd)) {
     const p = closePosition(st, args[0], ctx.now);
@@ -445,12 +455,24 @@ async function cycle(now = Date.now()) {
         const cost = p.entryCost / 2 + x.effRate * Nx;
         return { x, Nx, gain, cost, days: gain > 0 ? cost / gain : Infinity };
       });
-    const switchMsg = a => `${orderText(a.x.popShort, a.Nx, a.x.lev, a.x.vTicker)}\n受取差 ${pct(mine, 3)} → ${pct(a.x.cons, 3)}/日 · 乗り換えコスト ${usd(a.cost)}${isFinite(a.days) ? ' を ' + daysTxt(a.days) + 'で回収' : ''}\n終わったら「乗り換えた ${p.label} ${a.x.label}」と送ってね`;
+    // 同じ銘柄で向きを逆にする（FRの向きが入れ替わった時）
+    if (!r.closed && -r.favGap >= -S.maxGap) {
+      const fCons = r.warm ? Math.min(-r.cur, -r.avg) : -r.cur;
+      const ok = S.holdMode ? r.warm && fCons >= S.holdFloor : r.warm && -r.cur >= S.minDiff && -r.avg >= S.minDiff;
+      if (ok) {
+        const gain = (fCons - mine) / 100 * p.N;
+        const cost = p.entryCost / 2 + r.effRate * p.N;
+        alts.push({ flip: true, x: { ...r, popShort: !p.popShort, cons: fCons, score: fCons / 100 * S.holdDays - r.effRate },
+          Nx: p.N, gain, cost, days: gain > 0 ? cost / gain : Infinity });
+      }
+    }
+    const switchMsg = a => `${orderText(a.x.popShort, a.Nx, a.x.lev, a.x.vTicker)}\n受取差 ${pct(mine, 3)} → ${pct(a.x.cons, 3)}/日 · コスト ${usd(a.cost)}${isFinite(a.days) ? ' を ' + daysTxt(a.days) + 'で回収' : ''}\n終わったら「${a.flip ? `反転した ${p.label}` : `乗り換えた ${p.label} ${a.x.label}`}」と送ってね`;
+    const switchTitle = a => a.flip ? `${p.label} 向きを反転` : `${p.label} → ${a.x.label} 乗り換え`;
 
     if (p.status !== prev && p.status === 'exit') {
       // 常時保有モードでは「降りる」より「次に乗る」を優先
       const next = S.holdMode ? [...alts].sort((a, b) => b.x.score - a.x.score)[0] : null;
-      if (next) await send(`🔁<b>【指令】${p.label} → ${next.x.label} 乗り換え</b>\n${p.label}の受取差が${negH.toFixed(1)}時間悪化したまま（平均${pct(avgDir, 3)}/日）。\n1) ${p.label} を両方決済\n2) ${switchMsg(next)}`);
+      if (next) await send(`🔁<b>【指令】${switchTitle(next)}</b>\n${p.label}の受取差が${negH.toFixed(1)}時間悪化したまま（平均${pct(avgDir, 3)}/日）。\n1) ${p.label} を両方決済\n2) ${switchMsg(next)}`);
       else await send(`🔴<b>【指令】${p.label} 撤退</b>\n平均の受取差の悪化が${negH.toFixed(1)}時間継続${S.holdMode ? '。今は乗り換え先もない' : ''}。\nPopDEXとVariationalの<b>両方を決済</b>して「決済 ${p.label}」と送ってね\n推定損益 ${sgnUsd(p.net)}`);
       continue;
     } else if (p.status !== prev && p.status === 'move') {
@@ -468,7 +490,7 @@ async function cycle(now = Date.now()) {
       const k = `sw|${p.sym}`; // 1ポジションにつき3時間に1回まで
       if (now - (st.notifyLast[k] || 0) >= S.cooldownMin * 60e3 * 3) {
         st.notifyLast[k] = now;
-        await send(`🔁<b>【指令】${p.label} → ${alt.x.label} 乗り換え</b>\n1) ${p.label} を両方決済\n2) ${switchMsg(alt)}`);
+        await send(`🔁<b>【指令】${switchTitle(alt)}</b>\n1) ${p.label} を両方決済\n2) ${switchMsg(alt)}`);
       }
     }
   }
