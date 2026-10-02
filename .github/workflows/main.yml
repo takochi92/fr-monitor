@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write            # to commit state.json (positions, cooldowns, telegram offset)
+  contents: write            # to push state.json to the "state" branch
 
 concurrency:
   group: fr-monitor
@@ -21,19 +21,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # 状態は "state" ブランチに1コミットだけ置く（main の履歴を汚さない）。
+      # 初回は state ブランチが無いので main の state.json から始める。
+      # 通信エラーで古い state.json を上書きしないよう、「ブランチが無い」場合だけ main から始める。
+      - name: Load state
+        id: load
+        run: |
+          set +e
+          git ls-remote --exit-code --heads origin state > /dev/null
+          code=$?
+          set -e
+          if [ "$code" = "0" ]; then
+            git fetch --depth 1 origin state
+            git show FETCH_HEAD:state.json > state.json
+            echo "loaded state from state branch"
+          elif [ "$code" = "2" ]; then
+            echo "no state branch yet, using main/state.json"
+          else
+            echo "could not reach the state branch (exit $code)"; exit 1
+          fi
+
       - name: Run monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node monitor.js
+
       - name: Save state
-        if: always()
+        if: always() && steps.load.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -n "$(git status --porcelain state.json)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-            git add state.json
-            git commit -m "state update"
-            git pull --rebase
-            git push
-          fi
+          mkdir -p /tmp/state && cp state.json /tmp/state/state.json
+          cd /tmp/state
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git commit -qm "state $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:state

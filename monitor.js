@@ -1,5 +1,5 @@
 // PopDEX x Variational FR monitor - headless version (GitHub Actions or PC). No dependencies, Node 18+.
-// Checks the "relatively safe" pairs, sends entry/exit instructions to Telegram, and accepts commands from Telegram.
+// 全ペアを走査し、平均化したFR差で「最も効率のいい1本」を選んで Telegram に指令を出す。
 //
 //   node monitor.js            run once (GitHub Actions)
 //   node monitor.js --loop     run every 60 s (keep it running on a PC)
@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const STATE_FILE = path.join(__dirname, 'state.json');
+const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const POPDEX = 'https://api.popdex.xyz/api/v1/public';
@@ -18,31 +18,46 @@ const POP_INTERVAL_H = 1;
 
 const DEFAULT_SETTINGS = {
   balPop: 100, balV: 100, lev: 3, takerBps: 3.2,
-  minDiff: 0.02,   // %/24h needed for an entry instruction
-  maxDays: 7,      // break-even days needed for an entry instruction
-  maxGap: 0.1,     // tolerated unfavorable price gap, %
-  exitHours: 4,    // spread negative this long -> exit instruction
-  cooldownMin: 60, // same entry instruction is not repeated within this window
+  minDiff: 0.02,      // %/24h（現在値と平均の両方）がこれ以上でエントリー候補
+  maxDays: 7,         // コスト回収日数の上限
+  maxGap: 0.1,        // 不利な価格乖離の許容 %
+  exitHours: 4,       // 平均の受取差がマイナスのままこの時間続いたら撤退
+  cooldownMin: 60,    // 同じ指令を繰り返さない時間
+  emaHours: 6,        // FR差の平均化（指数移動平均）の時間幅
+  warmupMin: 60,      // 新しいペアはこの時間観測してから判定に使う
+  universe: 'wide',   // 'safe' = 主要5銘柄のみ / 'wide' = 両取引所の共通銘柄すべて（フィルタ付き）
+  minVol: 200000,     // wide: 両取引所の24h出来高の下限 $
+  maxSpreadBps: 15,   // wide: 片側スプレッドの上限 bps
+  maxPositions: 1,    // 同時保有数（証拠金は空き分で割り当て）
+  switchDays: 3,      // 乗り換えコストをこの日数以内に回収できるなら乗り換え指令
+  reportHour: 21,     // 日報を送る時刻（日本時間）
 };
+const NUMERIC_KEYS = Object.keys(DEFAULT_SETTINGS).filter(k => typeof DEFAULT_SETTINGS[k] === 'number');
 
-// same "relatively safe" set as the dashboard; swaps are skipped (their rates are not in the public API)
-const SAFE = {
-  XAUUSDT:     { label: 'GOLD',  maxLev: 5, market: 'metal',  v: 'XAU' },
-  XAGUSDT:     { label: '銀',    maxLev: 3, market: 'metal',  v: 'XAG' },
-  BTCUSDT:     { label: 'BTC',   maxLev: 3, market: 'crypto', v: 'BTC' },
-  ETHUSDT:     { label: 'ETH',   maxLev: 3, market: 'crypto', v: 'ETH' },
-  QQQUSDT:     { label: 'QQQ',   maxLev: 5, market: 'us',     v: 'QQQ' },
+// 主要銘柄（レバ上限は個別）
+const CORE = {
+  XAUUSDT: { label: 'GOLD', maxLev: 5, market: 'metal',  v: 'XAU' },
+  XAGUSDT: { label: '銀',   maxLev: 3, market: 'metal',  v: 'XAG' },
+  BTCUSDT: { label: 'BTC',  maxLev: 3, market: 'crypto', v: 'BTC' },
+  ETHUSDT: { label: 'ETH',  maxLev: 3, market: 'crypto', v: 'ETH' },
+  QQQUSDT: { label: 'QQQ',  maxLev: 5, market: 'us',     v: 'QQQ' },
 };
-const LABEL_ALIASES = { GOLD: 'XAUUSDT', XAU: 'XAUUSDT', 金: 'XAUUSDT', 銀: 'XAGUSDT', XAG: 'XAGUSDT', SILVER: 'XAGUSDT', BTC: 'BTCUSDT', ETH: 'ETHUSDT', QQQ: 'QQQUSDT' };
+const LABEL_ALIASES = { GOLD: 'XAUUSDT', XAU: 'XAUUSDT', 金: 'XAUUSDT', 銀: 'XAGUSDT', SILVER: 'XAGUSDT' };
+// wide: PopDEX名 -> Variational名（違うものだけ）
+const V_ALIAS = { kPEPE: '1000PEPE' };
+// 取引時間がアジア市場の銘柄は休場判定が合わないので除外
+const SKIP = new Set(['SAMSUNG', 'SKHYNIX', 'SKHY', 'KR200', 'JP225', 'SOFTBANK', 'CXMT', 'UNITREE', 'ZHIPU', 'MINIMAX', 'KSTR', 'EWY', 'EWJ']);
+const METAL_LIKE = new Set(['XAU', 'XAG', 'XPT', 'CL', 'BZ', 'COPPER', 'NATGAS']);
 
 // ---------- state ----------
 function loadState() {
   let s = {};
-  try { s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8').replace(/^﻿/, '')); } catch {} // tolerate BOM from Windows editors
+  try { s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8').replace(/^﻿/, '')); } catch {} // tolerate BOM
   return {
     settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) },
     positions: s.positions || [], history: s.history || [],
     pairState: s.pairState || {}, notifyLast: s.notifyLast || {}, tgOffset: s.tgOffset || 0,
+    ema: s.ema || {}, lastTopKey: s.lastTopKey || null, lastReportDay: s.lastReportDay || '',
   };
 }
 const saveState = st => fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2) + '\n');
@@ -52,7 +67,9 @@ const num = v => (v === undefined || v === null || v === '' ? NaN : Number(v));
 const usd = (v, d = 2) => (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(d);
 const sgnUsd = v => (v >= 0 ? '+' : '') + usd(v);
 const pct = (v, d = 4) => (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
-const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const daysTxt = d => (isFinite(d) ? d.toFixed(1) + '日' : '—');
+const jstDay = t => new Date(t + 9 * 3600e3).toISOString().slice(0, 10);
+const jstHour = t => new Date(t + 9 * 3600e3).getUTCHours();
 
 async function getJson(url, opts) {
   const where = url.split('?')[0].replace(/bot[^/]+/, 'bot***'); // never print the bot token
@@ -65,10 +82,10 @@ async function getJson(url, opts) {
   return res.json();
 }
 
-function marketClosed(market) {
+function marketClosed(market, now = Date.now()) {
   if (market === 'crypto') return '';
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' })
-    .formatToParts(new Date()).map(x => [x.type, x.value]));
+    .formatToParts(new Date(now)).map(x => [x.type, x.value]));
   const day = p.weekday, mins = Number(p.hour) * 60 + Number(p.minute);
   if (day === 'Sat' || (day === 'Sun' && mins < 18 * 60) || (day === 'Fri' && mins >= 17 * 60)) return '週末で市場休み';
   if (market === 'us' && !(mins >= 9 * 60 + 30 && mins < 16 * 60)) return '米国株 時間外';
@@ -76,13 +93,13 @@ function marketClosed(market) {
   return '';
 }
 
-// ---------- market data / evaluation (mirrors index.html) ----------
+// ---------- market data ----------
 async function fetchMarket() {
   const pop = [];
   let cursor = '';
   for (let page = 0; page < 20; page++) {
     const j = await getJson(`${POPDEX}/market/tickers?category=Futures&limit=100${cursor ? `&cursor=${cursor}` : ''}`);
-    if (j.code !== '200') throw new Error('PopDEX: ' + j.msg);
+    if (String(j.code) !== '200') throw new Error('PopDEX: ' + j.msg);
     pop.push(...j.data);
     if (!j.data.length || pop.length >= Number(j.total)) break;
     cursor = j.cursor;
@@ -91,47 +108,91 @@ async function fetchMarket() {
   return { pop, vari };
 }
 
-function evaluateAll(market, S) {
+function pairInfo(t, S) {
+  if (CORE[t.symbol]) return { ...CORE[t.symbol], core: true };
+  if (S.universe !== 'wide' || t.status && t.status !== 'Trading') return null;
+  const base = t.symbol.replace(/USDT$/, '');
+  if (SKIP.has(base)) return null;
+  const rwa = String(t.symbolId || '').startsWith('21'); // PopDEXの株・指数・商品は 21xxx
+  return { label: base.toUpperCase(), maxLev: rwa ? 3 : 2, market: rwa ? (METAL_LIKE.has(base) ? 'metal' : 'us') : 'crypto', v: V_ALIAS[base] || base, core: false };
+}
+
+// ---------- evaluation ----------
+// 価格・コストは建玉1ドルあたりの率で持ち、建玉額は後から掛ける
+function evaluateAll(market, st, now = Date.now()) {
+  const S = st.settings;
   const vMap = new Map(market.vari.listings.map(l => [l.ticker, l]));
+  const used = st.positions.reduce((a, p) => a + p.N / p.lev, 0);
+  const freeMargin = Math.max(0, Math.min(S.balPop, S.balV) - used);
   const out = [];
   for (const t of market.pop) {
-    const safe = SAFE[t.symbol];
-    const l = safe && vMap.get(safe.v);
-    if (!l || !(l.funding_interval_s > 0)) continue;
-    const popMid = (num(t.bid1Price) + num(t.ask1Price)) / 2 || num(t.markPrice);
+    const info = pairInfo(t, S);
+    const l = info && vMap.get(info.v);
+    if (!l || !(l.funding_interval_s > 0)) continue; // swap（FRなし）は対象外
+    const popBid = num(t.bid1Price), popAsk = num(t.ask1Price);
+    const popMid = (popBid + popAsk) / 2 || num(t.markPrice);
+    const lev = Math.max(1, Math.min(S.lev, info.maxLev));
+    const held = st.positions.find(p => p.sym === t.symbol);
+    const N = held ? held.N : freeMargin * lev;
     const q = l.quotes || {};
-    const lev = Math.max(1, Math.min(S.lev, safe.maxLev));
-    const margin = Math.min(S.balPop, S.balV);
-    const N = margin * lev;
     const b = N <= 1000 ? (q.size_1k || q.base) : N <= 100000 ? (q.size_100k || q.size_1k) : (q.size_1m || q.size_100k);
     const vMid = b ? (num(b.bid) + num(b.ask)) / 2 : num(l.mark_price);
-    if (!(Math.abs(popMid / vMid - 1) < 0.03)) continue;
+    if (!(popMid > 0 && vMid > 0) || !(Math.abs(popMid / vMid - 1) < 0.03)) continue; // 別商品・スケール違いは除外
+
+    const popSpread = (popAsk - popBid) / popMid;
+    const vSpread = b ? (num(b.ask) - num(b.bid)) / vMid : 0;
+    const popVol = num(t.turnover24h), vVol = num(l.volume_24h);
+    if (!info.core && !held) {
+      if (!(popVol >= S.minVol && vVol >= S.minVol)) continue;
+      if (popSpread * 1e4 > S.maxSpreadBps || vSpread * 1e4 > S.maxSpreadBps) continue;
+    }
 
     const popFR24 = num(t.fundingRate) * (24 / POP_INTERVAL_H) * 100;
     const vFR24 = num(l.funding_rate) / 365 * 100;
-    const dA = popFR24 - vFR24;  // Pop short / V long
-    const dB = -popFR24 + vFR24; // Pop long  / V short
-    const popShort = dA >= dB;
-    const diff = Math.max(dA, dB);
-    const popSpread = (num(t.ask1Price) - num(t.bid1Price)) / popMid;
-    const vSpread = b ? (num(b.ask) - num(b.bid)) / vMid : 0;
-    const cost = N * (2 * S.takerBps / 1e4 + popSpread + vSpread);
+    const dA = popFR24 - vFR24;  // Pop short / V long の受取差（%/24h）
+    const key = `${t.symbol}|${l.ticker}`;
+    const e = st.ema[key];
+    const warm = !!e && now - e.since >= S.warmupMin * 60e3;
+    const avgA = e ? e.v : dA;
+    // 方向は平均で決める（一瞬のブレで向きを変えない）
+    const popShort = held ? held.popShort : (warm ? avgA >= 0 : dA >= 0);
+    const cur = popShort ? dA : -dA;
+    const avg = popShort ? avgA : -avgA;
+    const cons = warm ? Math.min(cur, avg) : cur; // 控えめな見込み
+
+    const costRate = 2 * S.takerBps / 1e4 + popSpread + vSpread;
     const gap = (popMid / vMid - 1) * 100;
     const favGap = popShort ? gap : -gap;
-    const gapCost = favGap >= 0 ? -favGap / 100 * N * 0.5 : -favGap / 100 * N;
-    const effCost = Math.max(cost + gapCost, 0);
-    const daily = diff / 100 * N;
-    const days = daily > 0 ? effCost / daily : Infinity;
-    const closed = marketClosed(safe.market);
+    const gapRate = favGap >= 0 ? -favGap / 100 * 0.5 : -favGap / 100;
+    const effRate = Math.max(costRate + gapRate, 0);
+    const days = cons > 0 ? effRate / (cons / 100) : Infinity;
+    const closed = marketClosed(info.market, now);
     const gapBad = favGap < -S.maxGap;
-    const go = !closed && !gapBad && diff >= S.minDiff && days <= S.maxDays;
+    const go = !held && warm && !closed && !gapBad && N >= 10 && cur >= S.minDiff && avg >= S.minDiff && days <= S.maxDays;
     out.push({
-      key: `${t.symbol}|${l.ticker}`, sym: t.symbol, vTicker: l.ticker, label: safe.label, lev, N, margin,
-      popShort, dA, dB, diff, cost, effCost, days, week: daily * 7 - effCost, daily, gap, favGap, gapBad, closed, go, popMid, vMid,
+      key, sym: t.symbol, vTicker: l.ticker, label: info.label, core: info.core, lev, N,
+      popShort, dA, cur, avg, cons, warm, costRate, effRate, cost: costRate * N, effCost: effRate * N,
+      days, daily: cons / 100 * N, week: cons / 100 * N * 7 - effRate * N, weekRate: cons / 100 * 7 - effRate,
+      gap, favGap, gapBad, closed, go, popMid, vMid, popVol, vVol,
     });
   }
-  return out;
+  return { rows: out, freeMargin };
 }
+
+function updateEma(st, rows, now) {
+  const S = st.settings;
+  for (const r of rows) {
+    const e = st.ema[r.key];
+    if (!e) { st.ema[r.key] = { v: r.dA, t: now, since: now }; continue; }
+    const dt = Math.min(now - e.t, 2 * 3600e3);
+    const a = 1 - Math.exp(-dt / (S.emaHours * 3600e3));
+    e.v += a * (r.dA - e.v);
+    e.t = now;
+  }
+  for (const k of Object.keys(st.ema)) if (now - st.ema[k].t > 2 * 86400e3) delete st.ema[k]; // 2日見ていないものは捨てる
+}
+
+const ranked = rows => rows.filter(r => r.go).sort((a, b) => b.weekRate - a.weekRate);
 
 const orderText = (popShort, N, lev, vTicker) =>
   `PopDEXで<b>${popShort ? 'ショート' : 'ロング'}</b> ${usd(N, 0)}（${lev}x）\nVariational(${vTicker})で<b>${popShort ? 'ロング' : 'ショート'}</b> ${usd(N, 0)}（${lev}x）`;
@@ -159,35 +220,42 @@ async function readCommands(st) {
   return cmds;
 }
 
-function resolveSym(word) {
+function resolveRow(word, rows) {
   if (!word) return null;
   const w = word.toUpperCase().replace(/USDT$/, '');
-  return LABEL_ALIASES[w] || LABEL_ALIASES[word] || (SAFE[w + 'USDT'] ? w + 'USDT' : null);
+  const sym = LABEL_ALIASES[w] || LABEL_ALIASES[word] || w + 'USDT';
+  return rows.find(r => r.sym.toUpperCase() === sym.toUpperCase() || r.label.toUpperCase() === w) || null;
 }
 
 const HELP = [
   '<b>コマンド</b>（5分ごとに読み取り・返事は最大5〜15分後）',
-  '状況 … 今の判定と保有を表示',
+  '状況 … 保有と上位候補',
+  '候補 … エントリー候補ランキング',
   '持った GOLD … 今の指令どおり建てたとして記録',
   '決済 GOLD … 両方閉じたとして記録',
-  '残高 150 120 … PopDEX / Variational 残高を更新',
-  'レバ 3 … レバ上限を変更',
-  '対象: GOLD 銀 BTC ETH QQQ',
+  '乗り換えた 銀 GOLD … 銀を決済してGOLDを建てたとして記録',
+  '残高 150 120 … PopDEX / Variational 残高',
+  'レバ 3 … レバ上限',
+  '最大 2 … 同時保有数',
+  '範囲 広い / 主要 … 全銘柄 or 主要5銘柄',
+  '設定 … 設定一覧 / 設定 minDiff 0.03 … 個別変更',
 ].join('\n');
 
-async function handleCommand(text, st, rows) {
-  // accept "持った銀" / "決済GOLD" without a space too
-  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ)(?=\S)/, '$1 ');
+async function handleCommand(text, ctx) {
+  const { st } = ctx;
+  const S = st.settings;
+  const rows = () => ctx.rows;
+  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた)(?=\S)/, '$1 ');
   const [cmdRaw, ...args] = norm.split(/\s+/);
   const cmd = cmdRaw.toLowerCase();
-  const S = st.settings;
   if (['help', 'start', 'ヘルプ'].includes(cmd)) return send(HELP);
-  if (['status', '状況', 'じょうきょう'].includes(cmd)) return send(statusText(st, rows));
+  if (['status', '状況', 'じょうきょう'].includes(cmd)) return send(statusText(st, rows(), ctx.freeMargin));
+  if (['top', '候補', 'こうほ'].includes(cmd)) return send(candidatesText(rows(), 8, st));
   if (['bal', '残高'].includes(cmd)) {
     const a = num(args[0]), b = num(args[1]);
     if (!(a > 0 && b > 0)) return send('使い方: 残高 150 120（PopDEX Variational）');
     S.balPop = a; S.balV = b;
-    return send(`✅ 残高更新: PopDEX ${usd(a, 0)} / Variational ${usd(b, 0)}\n→ 証拠金 ${usd(Math.min(a, b), 0)} × レバ${S.lev}x で計算します`);
+    return send(`✅ 残高更新: PopDEX ${usd(a, 0)} / Variational ${usd(b, 0)}`);
   }
   if (['lev', 'レバ'].includes(cmd)) {
     const v = num(args[0]);
@@ -195,93 +263,195 @@ async function handleCommand(text, st, rows) {
     S.lev = v;
     return send(`✅ レバ上限 ${v}x（銘柄ごとの上限でさらに抑えます）`);
   }
+  if (['max', '最大'].includes(cmd)) {
+    const v = num(args[0]);
+    if (!(v >= 1 && v <= 5)) return send('使い方: 最大 2（1〜5）');
+    S.maxPositions = v;
+    return send(`✅ 同時保有 最大${v}本（証拠金は空き分で割り当て）`);
+  }
+  if (['universe', '範囲'].includes(cmd)) {
+    const w = (args[0] || '').toLowerCase();
+    S.universe = ['wide', '広い', 'ひろい', '全部'].includes(w) ? 'wide' : ['safe', '主要', '安全'].includes(w) ? 'safe' : S.universe;
+    return send(`✅ 対象: ${S.universe === 'wide' ? '共通銘柄すべて（出来高・スプレッドで絞り込み）' : '主要5銘柄のみ'}`);
+  }
+  if (['settings', '設定'].includes(cmd)) {
+    if (args.length >= 2) {
+      const k = NUMERIC_KEYS.find(x => x.toLowerCase() === args[0].toLowerCase());
+      const v = num(args[1]);
+      if (!k || !isFinite(v) || v < 0) return send('使い方: 設定 minDiff 0.03\n変更できる項目: ' + NUMERIC_KEYS.join(', '));
+      S[k] = v;
+      return send(`✅ ${k} = ${v}`);
+    }
+    return send('<b>設定</b>\n' + Object.entries(S).map(([k, v]) => `${k}: ${v}`).join('\n'));
+  }
   if (['hold', '持った', 'もった'].includes(cmd)) {
-    const sym = resolveSym(args[0]);
-    const r = rows.find(x => x.sym === sym);
+    const r = resolveRow(args[0], rows());
     if (!r) return send('銘柄が分からない… 例: 持った GOLD');
-    if (st.positions.some(p => p.sym === sym)) return send(`${r.label} はもう保有中として記録済み`);
-    const now = Date.now();
-    st.positions.push({ key: r.key, sym, label: r.label, vTicker: r.vTicker, popShort: r.popShort, N: r.N, lev: r.lev,
-      entryPop: r.popMid, entryV: r.vMid, entryCost: r.cost, openedAt: now, lastAt: now, earned: 0, negSince: null, status: 'hold' });
-    return send(`📌 <b>${r.label}</b> を保有として記録\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}\n往復コスト ${usd(r.cost)} · 撤退やヤバい時はここに指令を出します`);
+    if (st.positions.some(p => p.sym === r.sym)) return send(`${r.label} はもう保有中として記録済み`);
+    if (!(r.N >= 10)) return send('空き証拠金がないよ。「残高」を更新するか、先に決済を記録してね');
+    openPosition(st, r);
+    return send(`📌 <b>${r.label}</b> を保有として記録\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}\n往復コスト ${usd(r.cost)}`);
   }
   if (['close', '決済', 'けっさい'].includes(cmd)) {
-    const sym = resolveSym(args[0]);
-    const i = st.positions.findIndex(p => p.sym === sym);
-    if (i < 0) return send('その銘柄は保有記録にないよ。例: 決済 GOLD');
-    const p = st.positions[i];
-    st.history.unshift({ sym, label: p.label, openedAt: p.openedAt, closedAt: Date.now(), net: p.net || 0 });
-    st.positions.splice(i, 1);
+    const p = closePosition(st, args[0]);
+    if (!p) return send('その銘柄は保有記録にないよ。例: 決済 GOLD');
     const total = st.history.reduce((s, x) => s + x.net, 0);
     return send(`✅ <b>${p.label}</b> 決済を記録 · 推定損益 ${sgnUsd(p.net || 0)}\n決済済み合計 ${st.history.length}件 ${sgnUsd(total)}`);
+  }
+  if (['switch', '乗り換えた', 'のりかえた'].includes(cmd)) {
+    const p = closePosition(st, args[0]);
+    if (!p) return send('使い方: 乗り換えた 銀 GOLD（決済した銘柄 → 新しく建てた銘柄）');
+    ctx.recompute();
+    const r = resolveRow(args[1], ctx.rows);
+    if (!r) return send(`${p.label} の決済は記録した。新しい銘柄が分からないので「持った ○○」で記録してね`);
+    openPosition(st, r);
+    return send(`🔁 ${p.label}（${sgnUsd(p.net || 0)}）→ <b>${r.label}</b> に乗り換えを記録\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}`);
   }
   return send('？ 分からないコマンド\n\n' + HELP);
 }
 
-function statusText(st, rows) {
+function openPosition(st, r) {
+  const now = Date.now();
+  st.positions.push({ key: r.key, sym: r.sym, label: r.label, vTicker: r.vTicker, popShort: r.popShort, N: r.N, lev: r.lev,
+    entryPop: r.popMid, entryV: r.vMid, entryCost: r.cost, openedAt: now, lastAt: now, earned: 0, earnedAtReport: 0,
+    negSince: null, status: 'hold' });
+}
+
+function closePosition(st, word) {
+  if (!word) return null;
+  const w = word.toUpperCase().replace(/USDT$/, '');
+  const sym = (LABEL_ALIASES[w] || LABEL_ALIASES[word] || w + 'USDT').toUpperCase();
+  const i = st.positions.findIndex(p => p.sym.toUpperCase() === sym || p.label.toUpperCase() === w);
+  if (i < 0) return null;
+  const p = st.positions[i];
+  st.history.unshift({ sym: p.sym, label: p.label, openedAt: p.openedAt, closedAt: Date.now(), net: p.net || 0, earned: p.earned || 0 });
+  st.history = st.history.slice(0, 200);
+  st.positions.splice(i, 1);
+  return p;
+}
+
+function rowLine(r) {
+  const mark = r.go ? '🟢' : r.closed ? '💤' : r.gapBad ? '↔️' : !r.warm ? '⏳' : '⚪';
+  return `${mark} ${r.label} ${r.popShort ? 'Pop売/V買' : 'Pop買/V売'} 今${pct(r.cur, 3)} 平均${pct(r.avg, 3)}/日 · 回収${daysTxt(r.days)} · 1週${r.N >= 10 ? sgnUsd(r.week) : pct(r.weekRate * 100, 2) + '（建玉比）'}${r.closed ? ' · ' + r.closed : ''}`;
+}
+
+function candidatesText(rows, n, st) {
+  const list = [...rows].filter(r => !st.positions.some(p => p.sym === r.sym)).sort((a, b) => b.weekRate - a.weekRate).slice(0, n);
+  if (!list.length) return '候補なし';
+  return ['<b>🏁 候補ランキング</b>（1週見込み順・空き証拠金ベース）', ...list.map(rowLine)].join('\n');
+}
+
+function statusText(st, rows, freeMargin) {
   const S = st.settings;
-  const lines = [`<b>📊 状況</b>  証拠金 ${usd(Math.min(S.balPop, S.balV), 0)} · レバ上限 ${S.lev}x`];
-  for (const r of [...rows].sort((a, b) => b.diff - a.diff)) {
-    const mark = r.go ? '🟢' : r.closed ? '💤' : r.gapBad ? '↔️' : '⚪';
-    lines.push(`${mark} ${r.label} ${r.popShort ? 'Pop売/V買' : 'Pop買/V売'} ${pct(r.diff)}/日 · 回収${isFinite(r.days) ? r.days.toFixed(1) + '日' : '—'} · 1週${sgnUsd(r.week)}${r.closed ? ' · ' + r.closed : ''}`);
-  }
+  const lines = [`<b>📊 状況</b>  空き証拠金 ${usd(freeMargin, 0)} · レバ上限 ${S.lev}x · 最大${S.maxPositions}本 · ${S.universe === 'wide' ? '全銘柄' : '主要5'}`];
   if (st.positions.length) {
-    lines.push('', '<b>📌 保有</b>');
+    lines.push('<b>📌 保有</b>');
     for (const p of st.positions) {
       const liq = p.liqPop === undefined ? '計算中' : `±${Math.min(p.liqPop, p.liqV).toFixed(1)}%`;
-      lines.push(`${p.label}: 推定 ${sgnUsd(p.net || 0)} · FR累計 ${sgnUsd(p.earned)} · 清算まで ${liq}`);
+      lines.push(`${p.label}: 推定 ${sgnUsd(p.net || 0)} · FR累計 ${sgnUsd(p.earned)} · 清算まで ${liq} · ${p.status}`);
     }
-  } else lines.push('', '保有なし');
+  } else lines.push('保有なし');
+  lines.push('', candidatesText(rows, 5, st));
+  return lines.join('\n');
+}
+
+function reportText(st, rows) {
+  const lines = ['<b>🗒 日報</b>'];
+  let todayFr = 0;
+  for (const p of st.positions) {
+    const d = p.earned - (p.earnedAtReport || 0);
+    todayFr += d;
+    p.earnedAtReport = p.earned;
+    lines.push(`${p.label}: 今日のFR ${sgnUsd(d)} · 累計 ${sgnUsd(p.earned)} · 推定損益 ${sgnUsd(p.net || 0)}`);
+  }
+  if (!st.positions.length) lines.push('保有なし');
+  const closed = st.history.reduce((s, x) => s + x.net, 0);
+  const open = st.positions.reduce((s, p) => s + (p.net || 0), 0);
+  lines.push(`今日のFR合計 ${sgnUsd(todayFr)} · 通算（決済済み${sgnUsd(closed)} + 保有中${sgnUsd(open)}）${sgnUsd(closed + open)}`);
+  const best = [...rows].sort((a, b) => b.weekRate - a.weekRate).slice(0, 3);
+  if (best.length) lines.push('', '<b>上位候補</b>', ...best.map(rowLine));
   return lines.join('\n');
 }
 
 // ---------- main cycle ----------
-async function cycle() {
+async function cycle(now = Date.now()) {
   const st = loadState();
   const S = st.settings;
   const market = await fetchMarket();
-  let rows = evaluateAll(market, S);
+  const ctx = { st, rows: [], freeMargin: 0, recompute() { const e = evaluateAll(market, st, now); ctx.rows = e.rows; ctx.freeMargin = e.freeMargin; } };
+
+  ctx.recompute();
+  updateEma(st, ctx.rows, now);
+  ctx.recompute();
 
   for (const c of await readCommands(st)) {
-    await handleCommand(c, st, rows);
-    rows = evaluateAll(market, S); // settings may have changed
+    await handleCommand(c, ctx);
+    ctx.recompute(); // settings / positions may have changed
   }
+  const rows = ctx.rows;
 
-  const now = Date.now();
-  // held positions: integrate funding, check liquidation distance and exit condition
+  // ---- 保有中: FR積算・清算距離・撤退/乗り換え判定
+  const usedBy = sym => st.positions.filter(p => p.sym !== sym).reduce((a, p) => a + p.N / p.lev, 0);
   for (const p of st.positions) {
     const r = rows.find(x => x.key === p.key);
     if (!r) continue;
-    const d = p.popShort ? r.dA : r.dB;
-    p.earned += d / 100 * p.N * Math.min(now - p.lastAt, 3600e3) / 86400e3;
+    const d = p.popShort ? r.dA : -r.dA;
+    p.earned += d / 100 * p.N * Math.min(Math.max(now - p.lastAt, 0), 3600e3) / 86400e3;
     p.lastAt = now;
-    p.negSince = d < 0 ? (p.negSince || now) : null;
+    const avgDir = r.warm ? r.avg : d;
+    p.negSince = avgDir < 0 ? (p.negSince || now) : null;
     const popPnl = (p.popShort ? p.entryPop - r.popMid : r.popMid - p.entryPop) / p.entryPop * p.N;
     const vPnl = (p.popShort ? r.vMid - p.entryV : p.entryV - r.vMid) / p.entryV * p.N;
     p.net = p.earned + popPnl + vPnl - p.entryCost;
-    p.liqPop = Math.max(0, (S.balPop + popPnl) / p.N * 100 - 0.5);
-    p.liqV = Math.max(0, (S.balV + vPnl) / p.N * 100 - 0.5);
+    p.liqPop = Math.max(0, (S.balPop - usedBy(p.sym) + popPnl) / p.N * 100 - 0.5);
+    p.liqV = Math.max(0, (S.balV - usedBy(p.sym) + vPnl) / p.N * 100 - 0.5);
     const negH = p.negSince ? (now - p.negSince) / 3600e3 : 0;
     const prev = p.status;
-    p.status = negH >= S.exitHours ? 'exit' : Math.min(p.liqPop, p.liqV) < 15 ? 'move' : d < 0 ? 'watch' : 'hold';
-    if (p.status === prev) continue;
-    if (p.status === 'exit') {
-      await send(`🔴<b>【指令】${p.label} 撤退</b>\n受取差マイナスが${negH.toFixed(1)}時間継続。\nPopDEXとVariationalの<b>両方を決済</b>して「決済 ${p.label}」と送ってね\n推定損益 ${sgnUsd(p.net)}`);
-    } else if (p.status === 'move') {
+    p.status = negH >= S.exitHours ? 'exit' : Math.min(p.liqPop, p.liqV) < 15 ? 'move' : avgDir < 0 ? 'watch' : 'hold';
+
+    if (p.status !== prev && p.status === 'exit') {
+      await send(`🔴<b>【指令】${p.label} 撤退</b>\n平均の受取差マイナスが${negH.toFixed(1)}時間継続。\nPopDEXとVariationalの<b>両方を決済</b>して「決済 ${p.label}」と送ってね\n推定損益 ${sgnUsd(p.net)}`);
+    } else if (p.status !== prev && p.status === 'move') {
       const weak = p.liqPop < p.liqV ? 'PopDEX' : 'Variational';
       await send(`⚠️<b>【指令】${p.label} 証拠金を移動</b>\n${weak}側が清算まで ±${Math.min(p.liqPop, p.liqV).toFixed(1)}%。\n${weak === 'PopDEX' ? 'Variational→PopDEX' : 'PopDEX→Variational'} へ資金を移すか、両方を少し減らして`);
     }
+
+    // 乗り換え: 同じ資金で別ペアに移ったほうが、コスト込みで switchDays 以内に得になるなら
+    if (p.status === 'move') continue;
+    const mine = p.status === 'exit' ? 0 : Math.max(avgDir, 0);
+    const alt = rows.filter(x => !st.positions.some(q => q.sym === x.sym) && x.warm && !x.closed && !x.gapBad && x.cur >= S.minDiff && x.avg >= S.minDiff)
+      .map(x => {
+        const Nx = p.N / p.lev * x.lev; // 同じ証拠金で建て直したときの建玉
+        const gain = x.cons / 100 * Nx - mine / 100 * p.N;
+        const cost = p.entryCost / 2 + x.effRate * Nx;
+        return { x, Nx, gain, cost, days: gain > 0 ? cost / gain : Infinity };
+      })
+      .filter(o => o.days <= S.switchDays)
+      .sort((a, b) => a.days - b.days)[0];
+    if (alt) {
+      const k = `sw|${p.sym}|${alt.x.key}`;
+      if (now - (st.notifyLast[k] || 0) >= S.cooldownMin * 60e3 * 3) {
+        st.notifyLast[k] = now;
+        await send(`🔁<b>【指令】${p.label} → ${alt.x.label} 乗り換え</b>\n1) ${p.label} を両方決済\n2) ${orderText(alt.x.popShort, alt.Nx, alt.x.lev, alt.x.vTicker)}\n受取差 ${pct(mine, 3)} → ${pct(alt.x.cons, 3)}/日 · 乗り換えコスト ${usd(alt.cost)} を ${daysTxt(alt.days)}で回収\n終わったら「乗り換えた ${p.label} ${alt.x.label}」と送ってね`);
+      }
+    }
   }
 
-  // entry instructions on transition into "go", with cooldown
-  for (const r of rows) {
-    const prev = st.pairState[r.key];
-    const state = r.go ? 'go' : 'no';
-    st.pairState[r.key] = state;
-    if (state !== 'go' || prev === 'go' || st.positions.some(p => p.sym === r.sym)) continue;
-    if (now - (st.notifyLast[r.key] || 0) < S.cooldownMin * 60e3) continue;
-    st.notifyLast[r.key] = now;
-    await send(`🟢<b>【指令】${r.label} エントリー</b>\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}\n受取差 ${pct(r.diff)}/日 · 回収${r.days.toFixed(1)}日 · 1週見込み ${sgnUsd(r.week)}\n価格乖離 ${pct(r.gap, 3)}（${r.favGap >= 0 ? '有利' : '不利'}）\n建てたら「持った ${r.label}」と送ってね`);
+  // ---- 新規エントリー: 空き枠があれば一番効率のいい1本だけ指令
+  const top = st.positions.length < S.maxPositions ? ranked(rows)[0] : null;
+  if (top && top.key !== st.lastTopKey && now - (st.notifyLast[top.key] || 0) >= S.cooldownMin * 60e3) {
+    st.notifyLast[top.key] = now;
+    const runners = ranked(rows).slice(1, 3).map(r => `${r.label} 1週${sgnUsd(r.week)}`).join(' / ');
+    await send(`🟢<b>【指令】${top.label} エントリー</b>\n${orderText(top.popShort, top.N, top.lev, top.vTicker)}\n受取差 今${pct(top.cur, 3)} · 平均${pct(top.avg, 3)}/日 · 回収${daysTxt(top.days)} · 1週見込み ${sgnUsd(top.week)}\n価格乖離 ${pct(top.gap, 3)}（${top.favGap >= 0 ? '有利' : '不利'}）${runners ? '\n次点: ' + runners : ''}\n建てたら「持った ${top.label}」と送ってね`);
+  }
+  st.lastTopKey = top ? top.key : null;
+  for (const r of rows) st.pairState[r.key] = r.go ? 'go' : 'no';
+
+  // ---- 日報
+  const today = jstDay(now);
+  if (jstHour(now) >= S.reportHour && st.lastReportDay !== today) {
+    st.lastReportDay = today;
+    await send(reportText(st, rows));
   }
 
   saveState(st);
@@ -303,7 +473,9 @@ async function main() {
     }
   }
   const rows = await cycle();
-  console.log(rows.map(r => `${r.go ? 'GO ' : '-- '}${r.label} ${r.popShort ? 'PopS/VL' : 'PopL/VS'} ${r.diff.toFixed(4)}%/d days=${r.days.toFixed(1)} week=${r.week.toFixed(2)} ${r.closed}`).join('\n'));
+  console.log([...rows].sort((a, b) => b.weekRate - a.weekRate).slice(0, 15)
+    .map(r => `${r.go ? 'GO ' : '-- '}${r.label} ${r.popShort ? 'PopS/VL' : 'PopL/VS'} cur=${r.cur.toFixed(4)} avg=${r.avg.toFixed(4)}%/d days=${r.days.toFixed(1)} week=${r.week.toFixed(2)} ${r.warm ? '' : 'warmup'} ${r.closed}`).join('\n'));
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+if (require.main === module) main().catch(e => { console.error(e); process.exit(1); });
+module.exports = { cycle, evaluateAll, updateEma, loadState };
