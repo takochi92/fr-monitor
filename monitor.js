@@ -18,10 +18,16 @@ const POP_INTERVAL_H = 1;
 
 const DEFAULT_SETTINGS = {
   balPop: 100, balV: 100, lev: 3, takerBps: 3.2,
-  minDiff: 0.02,      // %/24h（現在値と平均の両方）がこれ以上でエントリー候補
-  maxDays: 7,         // コスト回収日数の上限
+  holdMode: 1,        // 1 = 常にポジションを持つ（ポイント重視・長期保有） / 0 = FR差が大きい時だけ入る
+  holdDays: 30,       // 常時保有モード: この日数持つ前提でコストを割って順位付け
+  holdFloor: -0.005,  // 常時保有モード: 見込み受取差 %/日 がこれ以上なら建ててよい（少しのマイナスは許容）
+  exitFloor: -0.01,   // 常時保有モード: 平均の受取差がこれを下回ったら「悪化」とみなす
+  minHoldHours: 24,   // 常時保有モード: 建ててからこの時間は乗り換え提案をしない
+  switchMinGain: 0.02,// 常時保有モード: 乗り換えは受取差がこれ以上 %/日 良くなる時だけ
+  minDiff: 0.02,      // 厳選モード: %/24h（現在値と平均の両方）がこれ以上でエントリー候補
+  maxDays: 7,         // 厳選モード: コスト回収日数の上限
   maxGap: 0.1,        // 不利な価格乖離の許容 %
-  exitHours: 4,       // 平均の受取差がマイナスのままこの時間続いたら撤退
+  exitHours: 24,      // 平均の受取差が悪化したままこの時間続いたら撤退（または乗り換え）
   cooldownMin: 60,    // 同じ指令を繰り返さない時間
   emaHours: 6,        // FR差の平均化（指数移動平均）の時間幅
   warmupMin: 60,      // 新しいペアはこの時間観測してから判定に使う
@@ -32,6 +38,8 @@ const DEFAULT_SETTINGS = {
   switchDays: 3,      // 乗り換えコストをこの日数以内に回収できるなら乗り換え指令
   reportHour: 21,     // 日報を送る時刻（日本時間）
 };
+const SETTINGS_VER = 2; // 既定値を変えた項目を古い state.json から引き継がないための版数
+const RESET_ON_UPGRADE = ['exitHours'];
 const NUMERIC_KEYS = Object.keys(DEFAULT_SETTINGS).filter(k => typeof DEFAULT_SETTINGS[k] === 'number');
 
 // 主要銘柄（レバ上限は個別）
@@ -53,8 +61,11 @@ const METAL_LIKE = new Set(['XAU', 'XAG', 'XPT', 'CL', 'BZ', 'COPPER', 'NATGAS']
 function loadState() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8').replace(/^﻿/, '')); } catch {} // tolerate BOM
+  const saved = { ...(s.settings || {}) };
+  if ((s.settingsVer || 0) < SETTINGS_VER) for (const k of RESET_ON_UPGRADE) delete saved[k];
   return {
-    settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) },
+    settingsVer: SETTINGS_VER,
+    settings: { ...DEFAULT_SETTINGS, ...saved },
     positions: s.positions || [], history: s.history || [],
     pairState: s.pairState || {}, notifyLast: s.notifyLast || {}, tgOffset: s.tgOffset || 0,
     ema: s.ema || {}, lastTopKey: s.lastTopKey || null, lastReportDay: s.lastReportDay || '',
@@ -121,6 +132,7 @@ function pairInfo(t, S) {
 // 価格・コストは建玉1ドルあたりの率で持ち、建玉額は後から掛ける
 function evaluateAll(market, st, now = Date.now()) {
   const S = st.settings;
+  HORIZON = S.holdMode ? S.holdDays : 7;
   const vMap = new Map(market.vari.listings.map(l => [l.ticker, l]));
   const used = st.positions.reduce((a, p) => a + p.N / p.lev, 0);
   const freeMargin = Math.max(0, Math.min(S.balPop, S.balV) - used);
@@ -168,11 +180,16 @@ function evaluateAll(market, st, now = Date.now()) {
     const days = cons > 0 ? effRate / (cons / 100) : Infinity;
     const closed = marketClosed(info.market, now);
     const gapBad = favGap < -S.maxGap;
-    const go = !held && warm && !closed && !gapBad && N >= 10 && cur >= S.minDiff && avg >= S.minDiff && days <= S.maxDays;
+    const okBase = warm && !closed && !gapBad;
+    const ok = S.holdMode ? okBase && cons >= S.holdFloor : okBase && cur >= S.minDiff && avg >= S.minDiff && days <= S.maxDays;
+    const go = !held && ok && N >= 10;
+    const weekRate = cons / 100 * 7 - effRate;
+    const holdRate = cons / 100 * S.holdDays - effRate; // 長く持つ前提の見込み（建玉比）
+    const score = S.holdMode ? holdRate : weekRate;
     out.push({
       key, sym: t.symbol, vTicker: l.ticker, label: info.label, core: info.core, lev, N,
       popShort, dA, cur, avg, cons, warm, costRate, effRate, cost: costRate * N, effCost: effRate * N,
-      days, daily: cons / 100 * N, week: cons / 100 * N * 7 - effRate * N, weekRate: cons / 100 * 7 - effRate,
+      days, daily: cons / 100 * N, week: weekRate * N, weekRate, holdRate, score, ok,
       gap, favGap, gapBad, closed, go, popMid, vMid, popVol, vVol,
     });
   }
@@ -192,7 +209,8 @@ function updateEma(st, rows, now) {
   for (const k of Object.keys(st.ema)) if (now - st.ema[k].t > 2 * 86400e3) delete st.ema[k]; // 2日見ていないものは捨てる
 }
 
-const ranked = rows => rows.filter(r => r.go).sort((a, b) => b.weekRate - a.weekRate);
+const ranked = rows => rows.filter(r => r.go).sort((a, b) => b.score - a.score);
+const byScore = (a, b) => b.score - a.score;
 
 const orderText = (popShort, N, lev, vTicker) =>
   `PopDEXで<b>${popShort ? 'ショート' : 'ロング'}</b> ${usd(N, 0)}（${lev}x）\nVariational(${vTicker})で<b>${popShort ? 'ロング' : 'ショート'}</b> ${usd(N, 0)}（${lev}x）`;
@@ -238,6 +256,7 @@ const HELP = [
   'レバ 3 … レバ上限',
   '最大 2 … 同時保有数',
   '範囲 広い / 主要 … 全銘柄 or 主要5銘柄',
+  'モード 常時 / 厳選 … 常にポジションを持つ or FR差が大きい時だけ',
   '設定 … 設定一覧 / 設定 minDiff 0.03 … 個別変更',
 ].join('\n');
 
@@ -245,7 +264,7 @@ async function handleCommand(text, ctx) {
   const { st } = ctx;
   const S = st.settings;
   const rows = () => ctx.rows;
-  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた)(?=\S)/, '$1 ');
+  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた|モード)(?=\S)/, '$1 ');
   const [cmdRaw, ...args] = norm.split(/\s+/);
   const cmd = cmdRaw.toLowerCase();
   if (['help', 'start', 'ヘルプ'].includes(cmd)) return send(HELP);
@@ -274,6 +293,12 @@ async function handleCommand(text, ctx) {
     S.universe = ['wide', '広い', 'ひろい', '全部'].includes(w) ? 'wide' : ['safe', '主要', '安全'].includes(w) ? 'safe' : S.universe;
     return send(`✅ 対象: ${S.universe === 'wide' ? '共通銘柄すべて（出来高・スプレッドで絞り込み）' : '主要5銘柄のみ'}`);
   }
+  if (['mode', 'モード'].includes(cmd)) {
+    const w = (args[0] || '').toLowerCase();
+    if (['常時', 'hold', 'じょうじ', '長期'].includes(w)) S.holdMode = 1;
+    else if (['厳選', 'pick', 'げんせん'].includes(w)) S.holdMode = 0;
+    return send(`✅ モード: ${S.holdMode ? '常時保有（ポイント重視・長く持つ）' : '厳選（FR差が大きい時だけ）'}`);
+  }
   if (['settings', '設定'].includes(cmd)) {
     if (args.length >= 2) {
       const k = NUMERIC_KEYS.find(x => x.toLowerCase() === args[0].toLowerCase());
@@ -289,56 +314,57 @@ async function handleCommand(text, ctx) {
     if (!r) return send('銘柄が分からない… 例: 持った GOLD');
     if (st.positions.some(p => p.sym === r.sym)) return send(`${r.label} はもう保有中として記録済み`);
     if (!(r.N >= 10)) return send('空き証拠金がないよ。「残高」を更新するか、先に決済を記録してね');
-    openPosition(st, r);
+    openPosition(st, r, ctx.now);
     return send(`📌 <b>${r.label}</b> を保有として記録\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}\n往復コスト ${usd(r.cost)}`);
   }
   if (['close', '決済', 'けっさい'].includes(cmd)) {
-    const p = closePosition(st, args[0]);
+    const p = closePosition(st, args[0], ctx.now);
     if (!p) return send('その銘柄は保有記録にないよ。例: 決済 GOLD');
     const total = st.history.reduce((s, x) => s + x.net, 0);
     return send(`✅ <b>${p.label}</b> 決済を記録 · 推定損益 ${sgnUsd(p.net || 0)}\n決済済み合計 ${st.history.length}件 ${sgnUsd(total)}`);
   }
   if (['switch', '乗り換えた', 'のりかえた'].includes(cmd)) {
-    const p = closePosition(st, args[0]);
+    const p = closePosition(st, args[0], ctx.now);
     if (!p) return send('使い方: 乗り換えた 銀 GOLD（決済した銘柄 → 新しく建てた銘柄）');
     ctx.recompute();
     const r = resolveRow(args[1], ctx.rows);
     if (!r) return send(`${p.label} の決済は記録した。新しい銘柄が分からないので「持った ○○」で記録してね`);
-    openPosition(st, r);
+    openPosition(st, r, ctx.now);
     return send(`🔁 ${p.label}（${sgnUsd(p.net || 0)}）→ <b>${r.label}</b> に乗り換えを記録\n${orderText(r.popShort, r.N, r.lev, r.vTicker)}`);
   }
   return send('？ 分からないコマンド\n\n' + HELP);
 }
 
-function openPosition(st, r) {
-  const now = Date.now();
+function openPosition(st, r, now = Date.now()) {
   st.positions.push({ key: r.key, sym: r.sym, label: r.label, vTicker: r.vTicker, popShort: r.popShort, N: r.N, lev: r.lev,
     entryPop: r.popMid, entryV: r.vMid, entryCost: r.cost, openedAt: now, lastAt: now, earned: 0, earnedAtReport: 0,
     negSince: null, status: 'hold' });
 }
 
-function closePosition(st, word) {
+function closePosition(st, word, now = Date.now()) {
   if (!word) return null;
   const w = word.toUpperCase().replace(/USDT$/, '');
   const sym = (LABEL_ALIASES[w] || LABEL_ALIASES[word] || w + 'USDT').toUpperCase();
   const i = st.positions.findIndex(p => p.sym.toUpperCase() === sym || p.label.toUpperCase() === w);
   if (i < 0) return null;
   const p = st.positions[i];
-  st.history.unshift({ sym: p.sym, label: p.label, openedAt: p.openedAt, closedAt: Date.now(), net: p.net || 0, earned: p.earned || 0 });
+  st.history.unshift({ sym: p.sym, label: p.label, openedAt: p.openedAt, closedAt: now, net: p.net || 0, earned: p.earned || 0 });
   st.history = st.history.slice(0, 200);
   st.positions.splice(i, 1);
   return p;
 }
 
+let HORIZON = 7;
+const horizonTxt = r => `${HORIZON}日${r.N >= 10 ? sgnUsd(r.score * r.N) : pct(r.score * 100, 2) + '（建玉比）'}`;
 function rowLine(r) {
-  const mark = r.go ? '🟢' : r.closed ? '💤' : r.gapBad ? '↔️' : !r.warm ? '⏳' : '⚪';
-  return `${mark} ${r.label} ${r.popShort ? 'Pop売/V買' : 'Pop買/V売'} 今${pct(r.cur, 3)} 平均${pct(r.avg, 3)}/日 · 回収${daysTxt(r.days)} · 1週${r.N >= 10 ? sgnUsd(r.week) : pct(r.weekRate * 100, 2) + '（建玉比）'}${r.closed ? ' · ' + r.closed : ''}`;
+  const mark = r.ok ? '🟢' : r.closed ? '💤' : r.gapBad ? '↔️' : !r.warm ? '⏳' : '⚪';
+  return `${mark} ${r.label} ${r.popShort ? 'Pop売/V買' : 'Pop買/V売'} 今${pct(r.cur, 3)} 平均${pct(r.avg, 3)}/日 · 回収${daysTxt(r.days)} · ${horizonTxt(r)}${r.closed ? ' · ' + r.closed : ''}`;
 }
 
 function candidatesText(rows, n, st) {
-  const list = [...rows].filter(r => !st.positions.some(p => p.sym === r.sym)).sort((a, b) => b.weekRate - a.weekRate).slice(0, n);
+  const list = [...rows].filter(r => !st.positions.some(p => p.sym === r.sym)).sort(byScore).slice(0, n);
   if (!list.length) return '候補なし';
-  return ['<b>🏁 候補ランキング</b>（1週見込み順・空き証拠金ベース）', ...list.map(rowLine)].join('\n');
+  return [`<b>🏁 候補ランキング</b>（${HORIZON}日見込み順・空き証拠金ベース）`, ...list.map(rowLine)].join('\n');
 }
 
 function statusText(st, rows, freeMargin) {
@@ -368,7 +394,7 @@ function reportText(st, rows) {
   const closed = st.history.reduce((s, x) => s + x.net, 0);
   const open = st.positions.reduce((s, p) => s + (p.net || 0), 0);
   lines.push(`今日のFR合計 ${sgnUsd(todayFr)} · 通算（決済済み${sgnUsd(closed)} + 保有中${sgnUsd(open)}）${sgnUsd(closed + open)}`);
-  const best = [...rows].sort((a, b) => b.weekRate - a.weekRate).slice(0, 3);
+  const best = [...rows].sort(byScore).slice(0, 3);
   if (best.length) lines.push('', '<b>上位候補</b>', ...best.map(rowLine));
   return lines.join('\n');
 }
@@ -378,7 +404,7 @@ async function cycle(now = Date.now()) {
   const st = loadState();
   const S = st.settings;
   const market = await fetchMarket();
-  const ctx = { st, rows: [], freeMargin: 0, recompute() { const e = evaluateAll(market, st, now); ctx.rows = e.rows; ctx.freeMargin = e.freeMargin; } };
+  const ctx = { st, now, rows: [], freeMargin: 0, recompute() { const e = evaluateAll(market, st, now); ctx.rows = e.rows; ctx.freeMargin = e.freeMargin; } };
 
   ctx.recompute();
   updateEma(st, ctx.rows, now);
@@ -399,7 +425,8 @@ async function cycle(now = Date.now()) {
     p.earned += d / 100 * p.N * Math.min(Math.max(now - p.lastAt, 0), 3600e3) / 86400e3;
     p.lastAt = now;
     const avgDir = r.warm ? r.avg : d;
-    p.negSince = avgDir < 0 ? (p.negSince || now) : null;
+    const badLine = S.holdMode ? S.exitFloor : 0;
+    p.negSince = avgDir < badLine ? (p.negSince || now) : null;
     const popPnl = (p.popShort ? p.entryPop - r.popMid : r.popMid - p.entryPop) / p.entryPop * p.N;
     const vPnl = (p.popShort ? r.vMid - p.entryV : p.entryV - r.vMid) / p.entryV * p.N;
     p.net = p.earned + popPnl + vPnl - p.entryCost;
@@ -407,44 +434,58 @@ async function cycle(now = Date.now()) {
     p.liqV = Math.max(0, (S.balV - usedBy(p.sym) + vPnl) / p.N * 100 - 0.5);
     const negH = p.negSince ? (now - p.negSince) / 3600e3 : 0;
     const prev = p.status;
-    p.status = negH >= S.exitHours ? 'exit' : Math.min(p.liqPop, p.liqV) < 15 ? 'move' : avgDir < 0 ? 'watch' : 'hold';
+    p.status = negH >= S.exitHours ? 'exit' : Math.min(p.liqPop, p.liqV) < 15 ? 'move' : avgDir < badLine ? 'watch' : 'hold';
+
+    // 乗り換え先の候補（同じ証拠金で建て直したとき）
+    const mine = p.status === 'exit' ? Math.min(avgDir, 0) : avgDir;
+    const alts = rows.filter(x => x.ok && !st.positions.some(q => q.sym === x.sym))
+      .map(x => {
+        const Nx = p.N / p.lev * x.lev;
+        const gain = x.cons / 100 * Nx - mine / 100 * p.N;
+        const cost = p.entryCost / 2 + x.effRate * Nx;
+        return { x, Nx, gain, cost, days: gain > 0 ? cost / gain : Infinity };
+      });
+    const switchMsg = a => `${orderText(a.x.popShort, a.Nx, a.x.lev, a.x.vTicker)}\n受取差 ${pct(mine, 3)} → ${pct(a.x.cons, 3)}/日 · 乗り換えコスト ${usd(a.cost)}${isFinite(a.days) ? ' を ' + daysTxt(a.days) + 'で回収' : ''}\n終わったら「乗り換えた ${p.label} ${a.x.label}」と送ってね`;
 
     if (p.status !== prev && p.status === 'exit') {
-      await send(`🔴<b>【指令】${p.label} 撤退</b>\n平均の受取差マイナスが${negH.toFixed(1)}時間継続。\nPopDEXとVariationalの<b>両方を決済</b>して「決済 ${p.label}」と送ってね\n推定損益 ${sgnUsd(p.net)}`);
+      // 常時保有モードでは「降りる」より「次に乗る」を優先
+      const next = S.holdMode ? [...alts].sort((a, b) => b.x.score - a.x.score)[0] : null;
+      if (next) await send(`🔁<b>【指令】${p.label} → ${next.x.label} 乗り換え</b>\n${p.label}の受取差が${negH.toFixed(1)}時間悪化したまま（平均${pct(avgDir, 3)}/日）。\n1) ${p.label} を両方決済\n2) ${switchMsg(next)}`);
+      else await send(`🔴<b>【指令】${p.label} 撤退</b>\n平均の受取差の悪化が${negH.toFixed(1)}時間継続${S.holdMode ? '。今は乗り換え先もない' : ''}。\nPopDEXとVariationalの<b>両方を決済</b>して「決済 ${p.label}」と送ってね\n推定損益 ${sgnUsd(p.net)}`);
+      continue;
     } else if (p.status !== prev && p.status === 'move') {
       const weak = p.liqPop < p.liqV ? 'PopDEX' : 'Variational';
       await send(`⚠️<b>【指令】${p.label} 証拠金を移動</b>\n${weak}側が清算まで ±${Math.min(p.liqPop, p.liqV).toFixed(1)}%。\n${weak === 'PopDEX' ? 'Variational→PopDEX' : 'PopDEX→Variational'} へ資金を移すか、両方を少し減らして`);
     }
 
-    // 乗り換え: 同じ資金で別ペアに移ったほうが、コスト込みで switchDays 以内に得になるなら
-    if (p.status === 'move') continue;
-    const mine = p.status === 'exit' ? 0 : Math.max(avgDir, 0);
-    const alt = rows.filter(x => !st.positions.some(q => q.sym === x.sym) && x.warm && !x.closed && !x.gapBad && x.cur >= S.minDiff && x.avg >= S.minDiff)
-      .map(x => {
-        const Nx = p.N / p.lev * x.lev; // 同じ証拠金で建て直したときの建玉
-        const gain = x.cons / 100 * Nx - mine / 100 * p.N;
-        const cost = p.entryCost / 2 + x.effRate * Nx;
-        return { x, Nx, gain, cost, days: gain > 0 ? cost / gain : Infinity };
-      })
-      .filter(o => o.days <= S.switchDays)
-      .sort((a, b) => a.days - b.days)[0];
+    // 乗り換え: 長く持つのが基本。建ててから minHoldHours 経ち、受取差が十分良くなり、コストを switchDays 以内に回収できる時だけ
+    if (p.status === 'move' || p.status === 'exit') continue;
+    if (S.holdMode && now - p.openedAt < S.minHoldHours * 3600e3 && avgDir >= S.exitFloor) continue; // 悪化中なら待たない
+    const alt = alts
+      .filter(o => o.days <= S.switchDays && (!S.holdMode || o.x.cons - mine >= S.switchMinGain))
+      .sort((a, b) => S.holdMode ? b.x.score - a.x.score : a.days - b.days)[0];
     if (alt) {
-      const k = `sw|${p.sym}|${alt.x.key}`;
+      const k = `sw|${p.sym}`; // 1ポジションにつき3時間に1回まで
       if (now - (st.notifyLast[k] || 0) >= S.cooldownMin * 60e3 * 3) {
         st.notifyLast[k] = now;
-        await send(`🔁<b>【指令】${p.label} → ${alt.x.label} 乗り換え</b>\n1) ${p.label} を両方決済\n2) ${orderText(alt.x.popShort, alt.Nx, alt.x.lev, alt.x.vTicker)}\n受取差 ${pct(mine, 3)} → ${pct(alt.x.cons, 3)}/日 · 乗り換えコスト ${usd(alt.cost)} を ${daysTxt(alt.days)}で回収\n終わったら「乗り換えた ${p.label} ${alt.x.label}」と送ってね`);
+        await send(`🔁<b>【指令】${p.label} → ${alt.x.label} 乗り換え</b>\n1) ${p.label} を両方決済\n2) ${switchMsg(alt)}`);
       }
     }
   }
 
   // ---- 新規エントリー: 空き枠があれば一番効率のいい1本だけ指令
+  // 常時保有モードでは空き枠がある限り、3時間ごとに催促する
   const top = st.positions.length < S.maxPositions ? ranked(rows)[0] : null;
-  if (top && top.key !== st.lastTopKey && now - (st.notifyLast[top.key] || 0) >= S.cooldownMin * 60e3) {
+  const sinceEntry = now - (st.notifyLast.entry || 0);
+  const changed = top && top.key !== st.lastTopKey;
+  if (top && sinceEntry >= S.cooldownMin * 60e3 && (changed || (S.holdMode && sinceEntry >= 180 * 60e3))) {
+    st.notifyLast.entry = now;
     st.notifyLast[top.key] = now;
-    const runners = ranked(rows).slice(1, 3).map(r => `${r.label} 1週${sgnUsd(r.week)}`).join(' / ');
-    await send(`🟢<b>【指令】${top.label} エントリー</b>\n${orderText(top.popShort, top.N, top.lev, top.vTicker)}\n受取差 今${pct(top.cur, 3)} · 平均${pct(top.avg, 3)}/日 · 回収${daysTxt(top.days)} · 1週見込み ${sgnUsd(top.week)}\n価格乖離 ${pct(top.gap, 3)}（${top.favGap >= 0 ? '有利' : '不利'}）${runners ? '\n次点: ' + runners : ''}\n建てたら「持った ${top.label}」と送ってね`);
+    const runners = ranked(rows).slice(1, 3).map(r => `${r.label} ${horizonTxt(r)}`).join(' / ');
+    await send(`🟢<b>【指令】${top.label} エントリー</b>\n${orderText(top.popShort, top.N, top.lev, top.vTicker)}\n受取差 今${pct(top.cur, 3)} · 平均${pct(top.avg, 3)}/日 · 回収${daysTxt(top.days)} · ${S.holdMode ? S.holdDays + '日見込み ' + sgnUsd(top.holdRate * top.N) : '1週見込み ' + sgnUsd(top.week)}\n価格乖離 ${pct(top.gap, 3)}（${top.favGap >= 0 ? '有利' : '不利'}）${runners ? '\n次点: ' + runners : ''}\n建てたら「持った ${top.label}」と送ってね`);
   }
-  st.lastTopKey = top ? top.key : null;
+  if (top && st.notifyLast.entry === now) st.lastTopKey = top.key;
+  if (!top) st.lastTopKey = null;
   for (const r of rows) st.pairState[r.key] = r.go ? 'go' : 'no';
 
   // ---- 日報
@@ -473,7 +514,7 @@ async function main() {
     }
   }
   const rows = await cycle();
-  console.log([...rows].sort((a, b) => b.weekRate - a.weekRate).slice(0, 15)
+  console.log([...rows].sort(byScore).slice(0, 15)
     .map(r => `${r.go ? 'GO ' : '-- '}${r.label} ${r.popShort ? 'PopS/VL' : 'PopL/VS'} cur=${r.cur.toFixed(4)} avg=${r.avg.toFixed(4)}%/d days=${r.days.toFixed(1)} week=${r.week.toFixed(2)} ${r.warm ? '' : 'warmup'} ${r.closed}`).join('\n'));
 }
 
