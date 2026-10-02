@@ -31,14 +31,14 @@ const DEFAULT_SETTINGS = {
   cooldownMin: 60,    // 同じ指令を繰り返さない時間
   emaHours: 6,        // FR差の平均化（指数移動平均）の時間幅
   warmupMin: 60,      // 新しいペアはこの時間観測してから判定に使う
-  universe: 'wide',   // 'safe' = 主要5銘柄のみ / 'wide' = 両取引所の共通銘柄すべて（フィルタ付き）
+  universe: 'wide',   // 'safe' = 主要6銘柄のみ / 'wide' = 両取引所の共通銘柄すべて（フィルタ付き）
   minVol: 200000,     // wide: 両取引所の24h出来高の下限 $
   maxSpreadBps: 15,   // wide: 片側スプレッドの上限 bps
   maxPositions: 1,    // 同時保有数（証拠金は空き分で割り当て）
   switchDays: 3,      // 乗り換えコストをこの日数以内に回収できるなら乗り換え指令
   reportHour: 21,     // 日報を送る時刻（日本時間）
-  altMaxLev: 3,       // 主要5銘柄以外の暗号資産のレバ上限
-  rwaMaxLev: 3,       // 主要5銘柄以外の株・商品のレバ上限
+  altMaxLev: 3,       // 主要6銘柄以外の暗号資産のレバ上限
+  rwaMaxLev: 3,       // 主要6銘柄以外の株・商品のレバ上限
 };
 const SETTINGS_VER = 2; // 既定値を変えた項目を古い state.json から引き継がないための版数
 const RESET_ON_UPGRADE = ['exitHours'];
@@ -259,7 +259,7 @@ const HELP = [
   '残高 150 120 … PopDEX / Variational 残高',
   'レバ 3 … レバ上限',
   '最大 2 … 同時保有数',
-  '範囲 広い / 主要 … 全銘柄 or 主要5銘柄',
+  '範囲 広い / 主要 … 全銘柄 or 主要6銘柄',
   'モード 常時 / 厳選 … 常にポジションを持つ or FR差が大きい時だけ',
   '設定 … 設定一覧 / 設定 minDiff 0.03 … 個別変更',
 ].join('\n');
@@ -382,7 +382,7 @@ function candidatesText(rows, n, st) {
 
 function statusText(st, rows, freeMargin) {
   const S = st.settings;
-  const lines = [`<b>📊 状況</b>  空き証拠金 ${usd(freeMargin, 0)} · レバ上限 ${S.lev}x · 最大${S.maxPositions}本 · ${S.universe === 'wide' ? '全銘柄' : '主要5'}`];
+  const lines = [`<b>📊 状況</b>  空き証拠金 ${usd(freeMargin, 0)} · レバ上限 ${S.lev}x · 最大${S.maxPositions}本 · ${S.universe === 'wide' ? '全銘柄' : '主要6'}`];
   if (st.positions.length) {
     lines.push('<b>📌 保有</b>');
     for (const p of st.positions) {
