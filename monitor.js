@@ -303,7 +303,7 @@ async function handleCommand(text, ctx) {
     if (args.length >= 2) {
       const k = NUMERIC_KEYS.find(x => x.toLowerCase() === args[0].toLowerCase());
       const v = num(args[1]);
-      if (!k || !isFinite(v) || v < 0) return send('使い方: 設定 minDiff 0.03\n変更できる項目: ' + NUMERIC_KEYS.join(', '));
+      if (!k || !isFinite(v) || (v < 0 && !['holdFloor', 'exitFloor'].includes(k))) return send('使い方: 設定 minDiff 0.03\n変更できる項目: ' + NUMERIC_KEYS.join(', '));
       S[k] = v;
       return send(`✅ ${k} = ${v}`);
     }
