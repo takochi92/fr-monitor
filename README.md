@@ -65,6 +65,8 @@ main の `state.json` は初回の種としてだけ使う。
 | maxSpreadBps | 15 | 全銘柄モードのスプレッド上限 |
 | takerBps | 3.2 | PopDEXの手数料（bps）。Variationalは0 |
 | reportHour | 21 | 日報の時刻（日本時間） |
+| altMaxLev | 3 | 主要5銘柄以外の暗号資産のレバ上限 |
+| rwaMaxLev | 3 | 主要5銘柄以外の株・商品のレバ上限 |
 
 ## 注意
 

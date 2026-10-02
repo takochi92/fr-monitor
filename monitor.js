@@ -37,6 +37,8 @@ const DEFAULT_SETTINGS = {
   maxPositions: 1,    // 同時保有数（証拠金は空き分で割り当て）
   switchDays: 3,      // 乗り換えコストをこの日数以内に回収できるなら乗り換え指令
   reportHour: 21,     // 日報を送る時刻（日本時間）
+  altMaxLev: 3,       // 主要5銘柄以外の暗号資産のレバ上限
+  rwaMaxLev: 3,       // 主要5銘柄以外の株・商品のレバ上限
 };
 const SETTINGS_VER = 2; // 既定値を変えた項目を古い state.json から引き継がないための版数
 const RESET_ON_UPGRADE = ['exitHours'];
@@ -46,8 +48,8 @@ const NUMERIC_KEYS = Object.keys(DEFAULT_SETTINGS).filter(k => typeof DEFAULT_SE
 const CORE = {
   XAUUSDT: { label: 'GOLD', maxLev: 5, market: 'metal',  v: 'XAU' },
   XAGUSDT: { label: '銀',   maxLev: 3, market: 'metal',  v: 'XAG' },
-  BTCUSDT: { label: 'BTC',  maxLev: 3, market: 'crypto', v: 'BTC' },
-  ETHUSDT: { label: 'ETH',  maxLev: 3, market: 'crypto', v: 'ETH' },
+  BTCUSDT: { label: 'BTC',  maxLev: 5, market: 'crypto', v: 'BTC' },
+  ETHUSDT: { label: 'ETH',  maxLev: 5, market: 'crypto', v: 'ETH' },
   QQQUSDT: { label: 'QQQ',  maxLev: 5, market: 'us',     v: 'QQQ' },
 };
 const LABEL_ALIASES = { GOLD: 'XAUUSDT', XAU: 'XAUUSDT', 金: 'XAUUSDT', 銀: 'XAGUSDT', SILVER: 'XAGUSDT' };
@@ -125,7 +127,7 @@ function pairInfo(t, S) {
   const base = t.symbol.replace(/USDT$/, '');
   if (SKIP.has(base)) return null;
   const rwa = String(t.symbolId || '').startsWith('21'); // PopDEXの株・指数・商品は 21xxx
-  return { label: base.toUpperCase(), maxLev: rwa ? 3 : 2, market: rwa ? (METAL_LIKE.has(base) ? 'metal' : 'us') : 'crypto', v: V_ALIAS[base] || base, core: false };
+  return { label: base.toUpperCase(), maxLev: rwa ? S.rwaMaxLev : S.altMaxLev, market: rwa ? (METAL_LIKE.has(base) ? 'metal' : 'us') : 'crypto', v: V_ALIAS[base] || base, core: false };
 }
 
 // ---------- evaluation ----------
