@@ -256,6 +256,7 @@ const HELP = [
   '決済 GOLD … 両方閉じたとして記録',
   '乗り換えた 銀 GOLD … 銀を決済してGOLDを建てたとして記録',
   '反転した 銀 … 同じ銘柄で売り買いを逆に建て直したとして記録',
+  '修正 BNB 870 6 … 記録を実際の建玉額・レバに合わせる（建値も足せる）',
   '残高 150 120 … PopDEX / Variational 残高',
   'レバ 3 … レバ上限',
   '最大 2 … 同時保有数',
@@ -268,7 +269,7 @@ async function handleCommand(text, ctx) {
   const { st } = ctx;
   const S = st.settings;
   const rows = () => ctx.rows;
-  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた|反転した|モード)(?=\S)/, '$1 ');
+  const norm = text.replace(/^\//, '').replace(/^(持った|もった|決済|けっさい|残高|レバ|最大|範囲|乗り換えた|反転した|修正|モード)(?=\S)/, '$1 ');
   const [cmdRaw, ...args] = norm.split(/\s+/);
   const cmd = cmdRaw.toLowerCase();
   if (['help', 'start', 'ヘルプ'].includes(cmd)) return send(HELP);
@@ -326,6 +327,19 @@ async function handleCommand(text, ctx) {
     if (!p) return send('その銘柄は保有記録にないよ。例: 決済 GOLD');
     const total = st.history.reduce((s, x) => s + x.net, 0);
     return send(`✅ <b>${p.label}</b> 決済を記録 · 推定損益 ${sgnUsd(p.net || 0)}\n決済済み合計 ${st.history.length}件 ${sgnUsd(total)}`);
+  }
+  if (['fix', '修正', 'しゅうせい'].includes(cmd)) {
+    // 修正 BNB 870 6 [建値]  … 実際の建玉額・レバ（・PopDEXの建値）に記録を合わせる
+    const w = (args[0] || '').toUpperCase().replace(/USDT$/, '');
+    const sym = (LABEL_ALIASES[w] || LABEL_ALIASES[args[0]] || w + 'USDT').toUpperCase();
+    const p = st.positions.find(x => x.sym.toUpperCase() === sym || x.label.toUpperCase() === w);
+    const N = num(args[1]), lev = num(args[2]), entry = num(args[3]);
+    if (!p || !(N > 0) || !(lev >= 1 && lev <= 50)) return send('使い方: 修正 BNB 870 6（建玉額$ レバ）\n建値も直すなら: 修正 BNB 870 6 1234.5');
+    const scale = N / p.N;
+    p.N = N; p.lev = lev; p.entryCost *= scale; p.earned *= scale; p.earnedAtReport = (p.earnedAtReport || 0) * scale;
+    if (entry > 0) p.entryPop = entry;
+    p.status = 'hold'; delete p.liqPop; delete p.liqV; // 次の実行で計算し直す
+    return send(`✅ <b>${p.label}</b> の記録を修正: 建玉 ${usd(N, 0)} · ${lev}x${entry > 0 ? ' · 建値 ' + entry : ''}\n残高も実際の値にしておいてね（例: 残高 145 145）`);
   }
   if (['flip', '反転した', 'はんてんした'].includes(cmd)) {
     const p = closePosition(st, args[0], ctx.now);
