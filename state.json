@@ -1,0 +1,315 @@
+{
+  "settingsVer": 2,
+  "settings": {
+    "balPop": 100,
+    "balV": 100,
+    "lev": 3,
+    "takerBps": 3.2,
+    "holdMode": 1,
+    "holdDays": 30,
+    "holdFloor": -0.005,
+    "exitFloor": -0.01,
+    "minHoldHours": 24,
+    "switchMinGain": 0.02,
+    "minDiff": 0.02,
+    "maxDays": 7,
+    "maxGap": 0.1,
+    "exitHours": 24,
+    "cooldownMin": 60,
+    "emaHours": 6,
+    "warmupMin": 60,
+    "universe": "wide",
+    "minVol": 200000,
+    "maxSpreadBps": 15,
+    "maxPositions": 1,
+    "switchDays": 3,
+    "reportHour": 21,
+    "altMaxLev": 3,
+    "rwaMaxLev": 3
+  },
+  "positions": [
+    {
+      "key": "BNBUSDT|BNB",
+      "sym": "BNBUSDT",
+      "label": "BNB",
+      "vTicker": "BNB",
+      "popShort": true,
+      "N": 300,
+      "lev": 3,
+      "entryPop": 769.45,
+      "entryV": 768.374,
+      "entryCost": 0.43245327920560567,
+      "openedAt": 1790992857690,
+      "lastAt": 1791089136085,
+      "earned": 0.12224727119935318,
+      "earnedAtReport": 0.08740471626905441,
+      "negSince": null,
+      "status": "hold",
+      "net": -0.2649645930354267,
+      "liqPop": 30.753925964433467,
+      "liqV": 34.92782117389014
+    }
+  ],
+  "history": [
+    {
+      "sym": "XAGUSDT",
+      "label": "銀",
+      "openedAt": 1790872651100,
+      "closedAt": 1790992857690,
+      "net": -0.6112170194084441,
+      "earned": 0.035200183232667444
+    }
+  ],
+  "pairState": {
+    "BTCUSDT|BTC": "no",
+    "XAUUSDT|XAU": "no",
+    "QQQUSDT|QQQ": "no",
+    "XAGUSDT|XAG": "no",
+    "ETHUSDT|ETH": "no",
+    "SNDKUSDT|SNDK": "no",
+    "ENAUSDT|ENA": "no",
+    "AVAXUSDT|AVAX": "no",
+    "ZECUSDT|ZEC": "no",
+    "PONSUSDT|PONS": "no",
+    "SUIUSDT|SUI": "no",
+    "NEARUSDT|NEAR": "no",
+    "HYPEUSDT|HYPE": "no",
+    "TAOUSDT|TAO": "no",
+    "SOLUSDT|SOL": "no",
+    "MUUSDT|MU": "no",
+    "XRPUSDT|XRP": "no",
+    "WLDUSDT|WLD": "no",
+    "BZUSDT|BZ": "no",
+    "DOGEUSDT|DOGE": "no",
+    "ADAUSDT|ADA": "no",
+    "COINUSDT|COIN": "no",
+    "AAVEUSDT|AAVE": "no",
+    "HOODUSDT|HOOD": "no",
+    "SPCXUSDT|SPCX": "no",
+    "MSTRUSDT|MSTR": "no",
+    "CLUSDT|CL": "no",
+    "GOOGLUSDT|GOOGL": "no",
+    "LINKUSDT|LINK": "no",
+    "SOXLUSDT|SOXL": "no",
+    "TRUMPUSDT|TRUMP": "no",
+    "kPEPEUSDT|1000PEPE": "no",
+    "BNBUSDT|BNB": "no",
+    "NVDAUSDT|NVDA": "no",
+    "APTUSDT|APT": "no",
+    "TSLAUSDT|TSLA": "no",
+    "CRCLUSDT|CRCL": "no",
+    "AAOIUSDT|AAOI": "no",
+    "XLMUSDT|XLM": "no",
+    "ONDOUSDT|ONDO": "no"
+  },
+  "notifyLast": {
+    "XAGUSDT|XAG": 1790870547731,
+    "BTCUSDT|BTC": 1790886717542,
+    "sw|XAGUSDT": 1790989837864
+  },
+  "tgOffset": 263225877,
+  "ema": {
+    "SNDKUSDT|SNDK": {
+      "v": 0.014830243014605643,
+      "t": 1791061836859,
+      "since": 1790905547498
+    },
+    "ENAUSDT|ENA": {
+      "v": -0.001014059061495962,
+      "t": 1791065736178,
+      "since": 1790905547498
+    },
+    "AVAXUSDT|AVAX": {
+      "v": 0.007429060278314241,
+      "t": 1791053136475,
+      "since": 1790905547498
+    },
+    "ZECUSDT|ZEC": {
+      "v": -0.0029375460465298126,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "PONSUSDT|PONS": {
+      "v": -0.04775949471779851,
+      "t": 1791086130199,
+      "since": 1790905547498
+    },
+    "SUIUSDT|SUI": {
+      "v": 0.00017664804837845175,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "NEARUSDT|NEAR": {
+      "v": -0.001087691084785663,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "HYPEUSDT|HYPE": {
+      "v": -0.001236217404107948,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "BTCUSDT|BTC": {
+      "v": 0.005060093685753596,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "TAOUSDT|TAO": {
+      "v": -0.0008666794437084692,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "SOLUSDT|SOL": {
+      "v": 0.0010261527243970578,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "MUUSDT|MU": {
+      "v": 0.014910650717038476,
+      "t": 1791056732712,
+      "since": 1790905547498
+    },
+    "XAUUSDT|XAU": {
+      "v": 0.014097297912782225,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "XRPUSDT|XRP": {
+      "v": -0.00021782446751476738,
+      "t": 1791054054776,
+      "since": 1790905547498
+    },
+    "QQQUSDT|QQQ": {
+      "v": 0.014486024345446063,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "WLDUSDT|WLD": {
+      "v": -0.0011999999999999997,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "BZUSDT|BZ": {
+      "v": 0.01621364984182899,
+      "t": 1791048328267,
+      "since": 1790905547498
+    },
+    "XAGUSDT|XAG": {
+      "v": 0.014321112131177139,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "DOGEUSDT|DOGE": {
+      "v": -0.0006317007616705844,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "ADAUSDT|ADA": {
+      "v": 0.004351196891027012,
+      "t": 1791007836140,
+      "since": 1790905547498
+    },
+    "COINUSDT|COIN": {
+      "v": 0.012129648545165028,
+      "t": 1791042641944,
+      "since": 1790905547498
+    },
+    "ETHUSDT|ETH": {
+      "v": 0.008152524757400284,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "AAVEUSDT|AAVE": {
+      "v": -0.00027928146847060046,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "HOODUSDT|HOOD": {
+      "v": 0.013515860682646008,
+      "t": 1791034247190,
+      "since": 1790905547498
+    },
+    "SPCXUSDT|SPCX": {
+      "v": 0.01428996638314287,
+      "t": 1791051930439,
+      "since": 1790905547498
+    },
+    "MSTRUSDT|MSTR": {
+      "v": 0.003148412462608066,
+      "t": 1791036935492,
+      "since": 1790905547498
+    },
+    "CLUSDT|CL": {
+      "v": 0.01538944786727958,
+      "t": 1791051930439,
+      "since": 1790905547498
+    },
+    "GOOGLUSDT|GOOGL": {
+      "v": 0.012395253637622668,
+      "t": 1790947853084,
+      "since": 1790905547498
+    },
+    "LINKUSDT|LINK": {
+      "v": 0.024429249374539747,
+      "t": 1791089136085,
+      "since": 1790905547498
+    },
+    "SOXLUSDT|SOXL": {
+      "v": 0.018050707372123484,
+      "t": 1791057036696,
+      "since": 1790905547498
+    },
+    "TRUMPUSDT|TRUMP": {
+      "v": 0.028764943587781172,
+      "t": 1791040535190,
+      "since": 1790905547498
+    },
+    "kPEPEUSDT|1000PEPE": {
+      "v": 0.011547652572872491,
+      "t": 1791052872398,
+      "since": 1790915130886
+    },
+    "BNBUSDT|BNB": {
+      "v": 0.01719973267911404,
+      "t": 1791089136085,
+      "since": 1790916036507
+    },
+    "NVDAUSDT|NVDA": {
+      "v": 0.014797483874491665,
+      "t": 1791034839090,
+      "since": 1790920857788
+    },
+    "APTUSDT|APT": {
+      "v": 0.07534948924192741,
+      "t": 1791003330114,
+      "since": 1790947532166
+    },
+    "TSLAUSDT|TSLA": {
+      "v": 0.013561312596673572,
+      "t": 1791034247190,
+      "since": 1790948439181
+    },
+    "CRCLUSDT|CRCL": {
+      "v": 0.005753386245809555,
+      "t": 1791034530867,
+      "since": 1790948736723
+    },
+    "AAOIUSDT|AAOI": {
+      "v": 0.014820837886336771,
+      "t": 1791025836948,
+      "since": 1790957171953
+    },
+    "XLMUSDT|XLM": {
+      "v": 0.0045291992958001095,
+      "t": 1791027936626,
+      "since": 1790966771677
+    },
+    "ONDOUSDT|ONDO": {
+      "v": 0.03198805845195047,
+      "t": 1791044171538,
+      "since": 1790966771677
+    }
+  },
+  "lastTopKey": null,
+  "lastReportDay": "2026-10-03"
+}
